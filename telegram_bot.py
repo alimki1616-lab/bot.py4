@@ -12,7 +12,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -23,15 +22,13 @@ load_dotenv(ROOT_DIR / '.env')
 # Configuration
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8012410295:AAE33t3wNvtXYT9M7BE2RLjUctYHgFD_ToQ')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '872863489'))
-MONGO_URL = os.environ.get('MONGO_URL')
-DB_NAME = os.environ.get('DB_NAME', 'telegram_bot_db')
 
 # محدودیت کاراکتر
 MAX_MESSAGE_LENGTH = 300
 
-# MongoDB setup
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+# In-memory storage (بدون دیتابیس)
+users_db = {}
+messages_db = []
 
 # Logging
 logging.basicConfig(
@@ -49,25 +46,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     user = update.effective_user
     
-    # Save user to database
-    await db.users.update_one(
-        {'user_id': user.id},
-        {
-            '$set': {
-                'username': user.username,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'last_active': datetime.now(timezone.utc).isoformat(),
-                'has_blocked': False,
-            },
-            '$setOnInsert': {
-                'user_id': user.id,
-                'is_blocked': False,
-                'created_at': datetime.now(timezone.utc).isoformat(),
-            }
-        },
-        upsert=True
-    )
+    # Save user to memory
+    users_db[user.id] = {
+        'user_id': user.id,
+        'username': user.username,
+        'first_name': user.first_name,
+        'last_name': user.last_name,
+        'last_active': datetime.now(timezone.utc).isoformat(),
+        'has_blocked': False,
+        'is_blocked': users_db.get(user.id, {}).get('is_blocked', False),
+        'created_at': users_db.get(user.id, {}).get('created_at', datetime.now(timezone.utc).isoformat()),
+    }
     
     # Check if user is admin
     if user.id == ADMIN_ID:
@@ -131,23 +120,22 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     message = update.message
     
     # Check if user is blocked
-    user_doc = await db.users.find_one({'user_id': user.id})
-    if user_doc and user_doc.get('is_blocked', False):
+    user_doc = users_db.get(user.id, {})
+    if user_doc.get('is_blocked', False):
         await message.reply_text("⛔️ شما از استفاده از بات محروم شده‌اید")
         return
     
     # Update has_blocked to False (user is active)
-    await db.users.update_one(
-        {'user_id': user.id},
-        {'$set': {'has_blocked': False, 'last_active': datetime.now(timezone.utc).isoformat()}}
-    )
+    if user.id in users_db:
+        users_db[user.id]['has_blocked'] = False
+        users_db[user.id]['last_active'] = datetime.now(timezone.utc).isoformat()
     
     # Admin message handling
     if user.id == ADMIN_ID:
         if user.id in user_states and user_states[user.id].get('mode') == 'waiting_for_user_id':
             if message.text and message.text.isdigit():
                 target_user_id = int(message.text)
-                target_user = await db.users.find_one({'user_id': target_user_id})
+                target_user = users_db.get(target_user_id)
                 if target_user:
                     user_states[user.id] = {'mode': 'sending_to_user', 'target_user_id': target_user_id}
                     await message.reply_text(
@@ -195,12 +183,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         
         elif user.id in user_states and user_states[user.id].get('mode') == 'broadcasting':
-            users = await db.users.find({'is_blocked': False, 'user_id': {'$ne': ADMIN_ID}}).to_list(10000)
+            active_users = [u for u in users_db.values() if not u.get('is_blocked', False) and u['user_id'] != ADMIN_ID]
             
             success_count = 0
             fail_count = 0
             
-            for user_doc in users:
+            for user_doc in active_users:
                 try:
                     if message.text:
                         await context.bot.send_message(user_doc['user_id'], f"📢 پیام همگانی:\n\n{message.text}")
@@ -459,9 +447,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ پیام فعالی برای ارسال وجود ندارد!")
             return
         
-        # ذخیره در دیتابیس
+        # ذخیره در memory
         for msg_data in pending_messages[user.id]:
-            await db.messages.insert_one(msg_data)
+            messages_db.append(msg_data)
         
         deleted_messages = [msg for msg in pending_messages[user.id] if msg['is_deleted']]
         
@@ -567,12 +555,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Admin stats
     if data == "admin_stats":
-        total_users = await db.users.count_documents({'user_id': {'$ne': ADMIN_ID}})
-        blocked_users = await db.users.count_documents({'is_blocked': True})
+        total_users = len([u for u in users_db.values() if u['user_id'] != ADMIN_ID])
+        blocked_users = len([u for u in users_db.values() if u.get('is_blocked', False)])
         active_users = total_users - blocked_users
-        total_messages = await db.messages.count_documents({})
-        deleted_messages = await db.messages.count_documents({'is_deleted': True})
-        left_users = await db.users.count_documents({'has_blocked': True})
+        total_messages = len(messages_db)
+        deleted_messages = len([m for m in messages_db if m.get('is_deleted', False)])
+        left_users = len([u for u in users_db.values() if u.get('has_blocked', False)])
         
         stats_text = (
             f"📊 *آمار بات*\n\n"
@@ -590,7 +578,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(stats_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     elif data == "admin_blocked_users":
-        left_users = await db.users.find({'has_blocked': True}).sort('last_active', -1).limit(20).to_list(20)
+        left_users = [u for u in users_db.values() if u.get('has_blocked', False)]
+        left_users = sorted(left_users, key=lambda x: x.get('last_active', ''), reverse=True)[:20]
         
         if not left_users:
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]]
@@ -628,16 +617,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif data == "admin_users_list":
-        users = await db.users.find({'user_id': {'$ne': ADMIN_ID}}).sort('created_at', -1).limit(15).to_list(15)
+        all_users = [u for u in users_db.values() if u['user_id'] != ADMIN_ID]
+        all_users = sorted(all_users, key=lambda x: x.get('created_at', ''), reverse=True)[:15]
         
-        if not users:
+        if not all_users:
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("کاربری ثبت نشده است", reply_markup=reply_markup)
             return
         
         users_text = "👥 *آخرین کاربران*\n\n"
-        for i, u in enumerate(users, 1):
+        for i, u in enumerate(all_users, 1):
             status = "🚫" if u.get('is_blocked', False) else "✅"
             left = "🚪" if u.get('has_blocked', False) else ""
             users_text += f"{i}. {status}{left} {u.get('first_name', 'N/A')}\n   @{u.get('username', 'ندارد')} | `{u['user_id']}`\n\n"
@@ -663,7 +653,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = int(data.split('_')[1])
         user_states[user.id] = {'mode': 'replying', 'target_user_id': target_user_id}
         
-        target_user = await db.users.find_one({'user_id': target_user_id})
+        target_user = users_db.get(target_user_id, {})
         
         await query.edit_message_reply_markup(reply_markup=None)
         await context.bot.send_message(
@@ -673,13 +663,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("block_"):
         target_user_id = int(data.split('_')[1])
-        user_doc = await db.users.find_one({'user_id': target_user_id})
-        is_blocked = user_doc.get('is_blocked', False) if user_doc else False
+        user_doc = users_db.get(target_user_id, {})
+        is_blocked = user_doc.get('is_blocked', False)
         
-        await db.users.update_one(
-            {'user_id': target_user_id},
-            {'$set': {'is_blocked': not is_blocked}}
-        )
+        if target_user_id in users_db:
+            users_db[target_user_id]['is_blocked'] = not is_blocked
         
         if is_blocked:
             status_text = "✅ رفع بلاک شد"
@@ -730,16 +718,14 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
         new_status = update.my_chat_member.new_chat_member.status
         
         if new_status in ['kicked', 'left']:
-            await db.users.update_one(
-                {'user_id': user_id},
-                {'$set': {'has_blocked': True, 'last_active': datetime.now(timezone.utc).isoformat()}}
-            )
+            if user_id in users_db:
+                users_db[user_id]['has_blocked'] = True
+                users_db[user_id]['last_active'] = datetime.now(timezone.utc).isoformat()
             logger.info(f"User {user_id} blocked the bot")
         elif new_status == 'member':
-            await db.users.update_one(
-                {'user_id': user_id},
-                {'$set': {'has_blocked': False, 'last_active': datetime.now(timezone.utc).isoformat()}}
-            )
+            if user_id in users_db:
+                users_db[user_id]['has_blocked'] = False
+                users_db[user_id]['last_active'] = datetime.now(timezone.utc).isoformat()
             logger.info(f"User {user_id} unblocked the bot")
 
 
@@ -750,6 +736,7 @@ def main():
         return
     
     logger.info(f"Starting bot with Admin ID: {ADMIN_ID}")
+    logger.info("⚠️ Running without database - data will be lost on restart!")
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
