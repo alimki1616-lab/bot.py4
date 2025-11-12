@@ -463,11 +463,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             for i, msg_data in enumerate(active_messages, 1):
                 admin_header = (
-                    f"📨 *پیام جدید {i}/{len(active_messages)}*\n\n"
+                    f"📨 پیام جدید {i}/{len(active_messages)}\n\n"
                     f"👤 {msg_data.get('first_name', 'N/A')} {msg_data.get('last_name', '') or ''}\n"
                     f"🆔 @{msg_data.get('username') or 'ندارد'}\n"
-                    f"🔢 ID: `{msg_data['user_id']}`\n"
-                    f"⏰ {datetime.fromisoformat(msg_data['timestamp']).strftime('%Y-%m-%d %H:%M')}\n\n"
+                    f"🔢 ID: {msg_data['user_id']}\n"
+                    f"⏰ {datetime.fromisoformat(msg_data['timestamp']).strftime('%Y-%m-%d %H:%M')}\n"
+                    f"━━━━━━━━━━━━━━━━\n\n"
                 )
                 
                 keyboard = [
@@ -480,8 +481,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         ADMIN_ID,
                         admin_header + f"💬 {msg_data['content']}",
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
+                        reply_markup=reply_markup
                     )
                 elif msg_data['type'] == 'photo':
                     caption_text = admin_header
@@ -494,8 +494,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ADMIN_ID,
                         msg_data['file_id'],
                         caption=caption_text,
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
+                        reply_markup=reply_markup
                     )
                 elif msg_data['type'] == 'video':
                     caption_text = admin_header
@@ -508,8 +507,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ADMIN_ID,
                         msg_data['file_id'],
                         caption=caption_text,
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
+                        reply_markup=reply_markup
                     )
                 
                 await asyncio.sleep(0.1)
@@ -636,7 +634,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, u in enumerate(all_users, 1):
             status = "🚫" if u.get('is_blocked', False) else "✅"
             left = "🚪" if u.get('has_blocked', False) else ""
-            users_text += f"{i}. {status}{left} {u.get('first_name', 'N/A')}\n   @{u.get('username', 'ندارد')} | `{u['user_id']}`\n\n"
+            users_text += f"{i}. {status}{left} {u.get('first_name', 'N/A')}\n   @{u.get('username', 'ندارد')} | {u['user_id']}\n\n"
         
         keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
