@@ -20,8 +20,14 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Configuration
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8012410295:AAE33t3wNvtXYT9M7BE2RLjUctYHgFD_ToQ')
-ADMIN_ID = int(os.environ.get('ADMIN_ID', '872863489'))
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
+
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
+
+if ADMIN_ID == 0:
+    raise ValueError("❌ ADMIN_ID is required!")
 
 # محدودیت کاراکتر
 MAX_MESSAGE_LENGTH = 300
@@ -731,10 +737,6 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 def main():
     """Start the bot"""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not found!")
-        return
-    
     logger.info(f"Starting bot with Admin ID: {ADMIN_ID}")
     logger.info("⚠️ Running without database - data will be lost on restart!")
     
